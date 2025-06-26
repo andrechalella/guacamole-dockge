@@ -1,166 +1,108 @@
 ####################################################################################
 # docker-compose file for Apache Guacamole
 # created by PCFreak 2017-06-28
+# forked by andrechalella 2025-06-23 in version 0.62
 #
-# Apache Guacamole is a clientless remote desktop gateway. It supports standard
-# protocols like VNC, RDP, and SSH. We call it clientless because no plugins or
-# client software are required. Thanks to HTML5, once Guacamole is installed on
-# a server, all you need to access your desktops is a web browser.
-####################################################################################
-#
-# What does this file do?
-#
-# Using docker-compose it will:
-#
-# - create a network 'guacnetwork_compose' with the 'bridge' driver.
-# - create a service 'guacd_compose' from 'guacamole/guacd' connected to 'guacnetwork_compose'
-# - create a service 'postgres_guacamole_compose' (1) from 'postgres' connected to 'guacnetwork_compose'
-# - create a service 'guacamole_compose' (2)  from 'guacamole/guacamole/' conn. to 'guacnetwork_compose'
-# - create a service 'nginx_guacamole_compose' (3) from 'nginx' connected to 'guacnetwork_compose'
-#
-# (1)
-#  DB-Init script is in './init/initdb.sql' it has been created executing
-#  'docker run --rm guacamole/guacamole /opt/guacamole/bin/initdb.sh --postgresql > ./init/initdb.sql'
-#  once.
-#  DATA-DIR       is in './data'
-#  If you want to change the DB password change all lines with 'POSTGRES_PASSWORD:' and
-#  change it to your needs before first start.
-#  To start from scratch delete './data' dir completely
-#  './data' will hold all data after first start!
-#  The initdb.d scripts are only executed the first time the container is started
-#  (and the database files are empty). If the database files already exist then the initdb.d
-#  scripts are ignored (e.g. when you mount a local directory or when docker-compose saves
-#  the volume and reuses it for the new container).
-#
-#  !!!!! MAKE SURE your folder './init' is executable (chmod +x ./init)
-#  !!!!! or 'initdb.sql' will be ignored!
-#  
-#  './data' will hold all data after first start!
-#
-# (2)
-#  Make sure you use the same value for 'POSTGRES_USER' and 'POSTGRES_PASSWORD'
-#  as configured under (1)
-#
-# (3)
-#  ./nginx/templates folder will be mapped read-only into the container at /etc/nginx/templates
-#  and according to the official nginx container docs the guacamole.conf.template will be
-#  placed in /etc/nginx/conf.d/guacamole.conf after container startup.
-#  ./nginx/ssl will be mapped into the container at /etc/nginx/ssl
-#  prepare.sh creates a a self-signed certificate. If you want to use your own certs
-#  just remove the part that generates the certs from prepare.sh and replace
-#  'self-ssl.key' and 'self.cert' with your certificate.
-#  nginx will export port 8443 to the outside world, make sure that this port is reachable
-#  on your system from the "outside world". All other traffic is only internal.
-#
-#  You could remove the entire 'nginx' service from this file if you want to use your own
-#  reverse proxy in front of guacamole. If doing so, make sure you change the line
-#   from     - 8080/tcp
-#   to       - 8080:8080/tcp
-#  within the 'guacamole' service. This will expose the guacamole webinterface directly
-#  on port 8080 and you can use it for your own purposes.
-#  Note: Guacamole is available on :8080/guacamole, not /.
-#
-# !!!!! FOR INITAL SETUP (after git clone) run ./prepare.sh once
-#
-# !!!!! FOR A FULL RESET (WILL ERASE YOUR DATABASE, YOUR FILES, YOUR RECORDS AND CERTS) DO A
-# !!!!!  ./reset.sh
-#
-#
-# The initial login to the guacamole webinterface is:
-#
-#     Username: guacadmin
-#     Password: guacadmin
-#
-# Make sure you change it immediately!
-#
-# version            date              comment
-# 0.1                2017-06-28        initial release
-# 0.2                2017-10-09        minor fixes + internal GIT push
-# 0.3                2017-10-09        minor fixes + public GIT push
-# 0.4                2019-08-14        creating of ssl certs now in prepare.sh
-#                                      simplified nginx startup commands
-# 0.5                2023-02-24        nginx now uses a template + some minor changes
-# 0.6                2023-03-23        switched to postgres 15.2-alpine
-# 0.61               2024-07-27        fix networks + version 3.0
-# 0.62               2024-07-27        fix
-#####################################################################################
+# Changes by andrechalella:
+# - Make docker-compose.yml truly standalone for immediate deployment by
+#   pasting the contents in Dockge's text-editor UI.
+# - To this end, I implemented Apache's suggested DB initialization strategy
+#    (shared volume with the packaged schema files).
+# - Remove Nginx.
 
-#the attribute `version` is obsolete, it will be ignored, please remove it to avoid potential confusion
-#version: '3.0'
+# HOW TO USE
+#
+# This docker-compose.yml file is made to be standalone, i.e there is no preparation
+# needed. Simply paste these contents into Dockge's "compose.yaml" UI, or drop this
+# file into a subdirectory and run "docker compose up", and everything should
+# download and start, with proper initialization the first time.
 
-# networks
-# create a network 'guacnetwork_compose' in mode 'bridged'
-networks:
-  guacnetwork_compose:
-    driver: bridge
+# ACCESSING GUACAMOLE WEB INTERFACE
+#
+# By default, this docker-compose.yml file does not expose/publish ports. The
+# containers are connected solely to the "guacamole-network" Docker network.
+#
+# If you want to access Guacamole UI directly, normally you can find the Guacamole
+# container's IP with `docker inspect <container>`. See "Guacamole URL" note below.
+#
+# If you want other containers (e.g Nginx Proxy Manager) to access Guacamole via its
+# container hostname (Docker DNS), remember to add your Docker custom network to the
+# "networks" section of the "guacamole" service (also to the "networks" top-level element).
+#
+# Guacamole URL:
+# - Guacamole is accessible via the 8080 TCP port (Apache Tomcat HTTP server)
+# - Guacamole's URL path is "/guacamole/"
+# - So for instance `curl http://<container-ip>:8080/guacamole/`
 
-# services
+# Dockge's parser/serializer mangles our file a little bit:
+#   - it will replace fragment names with generic strings like 'a1'
+#   - it will remove blank lines
+#   - it will write 'null' after the top-level volume keys
+#   - it will change our command formats
+
+x-pg-env-pg: &pg-env-pg
+  POSTGRES_DB: ${POSTGRES_DB:-guacamole_db}
+  POSTGRES_USER: ${POSTGRES_USER:-guacamole_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-guacpass}
+
+x-pg-env-guacamole: &pg-env-guacamole
+  POSTGRESQL_DATABASE: ${POSTGRES_DB:-guacamole_db}
+  POSTGRESQL_USERNAME: ${POSTGRES_USER:-guacamole_user}
+  POSTGRESQL_PASSWORD: ${POSTGRES_PASSWORD:-guacpass}
+
 services:
-  # guacd
   guacd:
-    container_name: guacd_compose
     image: guacamole/guacd
     networks:
-      - guacnetwork_compose
-    restart: always
-    volumes:
-    - ./drive:/drive:rw
-    - ./record:/record:rw
-  # postgres
-  postgres:
-    container_name: postgres_guacamole_compose
-    environment:
-      PGDATA: /var/lib/postgresql/data/guacamole
-      POSTGRES_DB: guacamole_db
-      POSTGRES_PASSWORD: 'ChooseYourOwnPasswordHere1234'
-      POSTGRES_USER: guacamole_user
-    image: postgres:15.2-alpine
-    networks:
-      - guacnetwork_compose
-    restart: always
-    volumes:
-    - ./init:/docker-entrypoint-initdb.d:z
-    - ./data:/var/lib/postgresql/data:Z
+      - guacamole-network
+    restart: unless-stopped
+    # Custom health-check is needed until the below PR gets merged,
+    # otherwise guacd takes 5 minutes to show as healthy
+    # https://github.com/apache/guacamole-server/pull/577
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "4822"]
+      interval: 5m
+      timeout: 5s
+      start_period: 15s
 
-  # guacamole
+  db:
+    image: postgres:17
+    environment: *pg-env-pg
+    volumes:
+      - guacamole_db_data:/var/lib/postgresql/data
+      - shared_pg_initdb:/docker-entrypoint-initdb.d:ro
+    networks:
+      - guacamole-network
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   guacamole:
-    container_name: guacamole_compose
-    group_add:
-      - "1000"
-    depends_on:
-    - guacd
-    - postgres
+    image: guacamole/guacamole
+    volumes:
+      - shared_pg_initdb:/opt/guacamole/extensions/guacamole-auth-jdbc/postgresql/schema:ro
     environment:
       GUACD_HOSTNAME: guacd
-      POSTGRES_DATABASE: guacamole_db
-      POSTGRES_HOSTNAME: postgres
-      POSTGRES_PASSWORD: 'ChooseYourOwnPasswordHere1234'
-      POSTGRES_USER: guacamole_user
-      RECORDING_SEARCH_PATH: /record
-    image: guacamole/guacamole
+      POSTGRESQL_HOSTNAME: db
+      <<: *pg-env-guacamole
     networks:
-      - guacnetwork_compose
-    volumes:
-      - ./record:/record:rw
-    ports:
-## enable next line if not using nginx
-##    - 8080:8080/tcp # Guacamole is on :8080/guacamole, not /.
-## enable next line when using nginx
-    - 8080/tcp
-    restart: always
+      - guacamole-network
+    depends_on:
+      db:
+        condition: service_healthy
+      guacd:
+        condition: service_healthy
+    restart: unless-stopped
 
-########### optional ##############
-  # nginx
-  nginx:
-   container_name: nginx_guacamole_compose
-   restart: always
-   image: nginx:latest
-   volumes:
-   - ./nginx/templates:/etc/nginx/templates:ro
-   - ./nginx/ssl/self.cert:/etc/nginx/ssl/self.cert:ro
-   - ./nginx/ssl/self-ssl.key:/etc/nginx/ssl/self-ssl.key:ro
-   ports:
-   - 8443:443
-   networks:
-     - guacnetwork_compose
-####################################################################################
+volumes:
+  shared_pg_initdb:
+  guacamole_db_data:
+
+networks:
+  guacamole-network:
+    driver: bridge
